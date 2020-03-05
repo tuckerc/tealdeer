@@ -15,6 +15,7 @@
 
 #[cfg(feature = "logging")]
 extern crate env_logger;
+extern crate clap;
 
 use std::fs::File;
 use std::io::BufReader;
@@ -26,6 +27,7 @@ use std::time::Duration;
 use ansi_term::Color;
 use app_dirs::AppInfo;
 use docopt::Docopt;
+use clap::{Arg, App, SubCommand};
 #[cfg(not(target_os = "windows"))]
 use pager::Pager;
 use serde_derive::Deserialize;
@@ -142,7 +144,7 @@ fn print_page(path: &Path, enable_markdown: bool, enable_styles: bool) -> Result
 
 /// Set up display pager
 #[cfg(not(target_os = "windows"))]
-fn configure_pager(args: &Args, enable_styles: bool) {
+fn configure_pager(args: &Arg, enable_styles: bool) {
     // Flags have precedence
     if args.flag_pager {
         Pager::with_default_pager(PAGER_COMMAND).setup();
@@ -168,12 +170,12 @@ fn configure_pager(args: &Args, enable_styles: bool) {
 }
 
 #[cfg(target_os = "windows")]
-fn configure_pager(_args: &Args, _enable_styles: bool) {
+fn configure_pager(_args: &Arg, _enable_styles: bool) {
     eprintln!("Warning: -p / --pager flag not available on Windows!");
 }
 
 /// Check the cache for freshness
-fn check_cache(args: &Args) {
+fn check_cache(args: &Arg) {
     if !args.flag_update {
         match Cache::last_update() {
             Some(ago) if ago > MAX_CACHE_AGE => {
@@ -309,12 +311,66 @@ fn main() {
     init_log();
 
     // Parse arguments
-    let args: Args = Docopt::new(USAGE)
-        .and_then(|d| d.deserialize())
-        .unwrap_or_else(|e| e.exit());
-
+    let args = App::new("tldr")
+                          .version("1.3.1")
+                          .author("tealdeer")
+                          .about("tldr - Simplified and community-driven man pages")
+                          .arg(Arg::with_name("command")
+                               .help("Sets the command to tldr")
+                               .required(false)
+                               .index(1))
+                          .arg(Arg::with_name("help")
+                               .short("h")
+                               .long("help")
+                               .help("Show version information"))
+                          .arg(Arg::with_name("version")
+                               .short("v")
+                               .long("version")
+                               .help("Show version information"))
+                          .arg(Arg::with_name("list")
+                               .short("l")
+                               .long("list")
+                               .help("List all commands in the cache"))
+                          .arg(Arg::with_name("render")
+                               .short("f")
+                               .long("render")
+                               .value_name("file")
+                               .help("Render a specific markdown file"))
+                          .arg(Arg::with_name("os")
+                               .short("o")
+                               .long("os")
+                               .value_name("type")
+                               .help("Override the operating system [linux, osx, sunos, windows]"))
+                          .arg(Arg::with_name("update")
+                               .short("u")
+                               .long("update")
+                               .help("Update the local cache"))
+                          .arg(Arg::with_name("clear_cache")
+                               .short("c")
+                               .long("clear-cache")
+                               .help("Clear the local cache"))
+                          .arg(Arg::with_name("pager")
+                               .short("p")
+                               .long("pager")
+                               .help("Use a pager to page output"))
+                          .arg(Arg::with_name("markdown")
+                               .short("m")
+                               .long("markdown")
+                               .help("Display the raw markdown instead of rendering it"))
+                          .arg(Arg::with_name("quiet")
+                               .short("q")
+                               .long("quiet")
+                               .help("Suppress informational messages"))
+                          .arg(Arg::with_name("config_path")
+                               .long("config-path")
+                               .help("Show config file path"))
+                          .arg(Arg::with_name("seed_config")
+                               .long("seed-config")
+                               .help("Create a basic config"))
+                          .get_matches();
+    
     // Show version and exit
-    if args.flag_version {
+    if args.is_present("version") {
         let os = get_os();
         println!("{} v{} ({})", NAME, VERSION, os);
         process::exit(0);
@@ -330,7 +386,7 @@ fn main() {
     configure_pager(&args, enable_styles);
 
     // Specify target OS
-    let os: OsType = match args.flag_os {
+    let os: OsType = match args.value_of("os") {
         Some(os) => os,
         None => get_os(),
     };
@@ -340,28 +396,28 @@ fn main() {
 
     // Clear cache, pass through
     if args.flag_clear_cache {
-        clear_cache(args.flag_quiet);
+        clear_cache(args.value_of("quiet"));
     }
 
     // Update cache, pass through
-    if args.flag_update {
-        update_cache(&cache, args.flag_quiet);
+    if args.is_present("update") {
+        update_cache(&cache, args.value_of);
     }
 
     // Show config file and path, pass through
-    if args.flag_config_path {
+    if args.is_present("config_path") {
         show_config_path();
     }
 
     // Create a basic config and exit
-    if args.flag_seed_config {
+    if args.is_present("seed_config") {
         create_config_and_exit();
     }
 
     // Render local file and exit
-    if let Some(ref file) = args.flag_render {
+    if let Some(ref file) = args.value_of("render") {
         let path = PathBuf::from(file);
-        if let Err(msg) = print_page(&path, args.flag_markdown, enable_styles) {
+        if let Err(msg) = print_page(&path, args.value_of("markdown"), enable_styles) {
             eprintln!("{}", msg);
             process::exit(1);
         } else {
@@ -390,14 +446,14 @@ fn main() {
     }
 
     // Show command from cache
-    if let Some(ref command) = args.arg_command {
+    if let Some(ref command) = args.value_of("command") {
         let command = command.join("-");
         // Check cache for freshness
         check_cache(&args);
 
         // Search for command in cache
         if let Some(path) = cache.find_page(&command) {
-            if let Err(msg) = print_page(&path, args.flag_markdown, enable_styles) {
+            if let Err(msg) = print_page(&path, args.value_of("markdown"), enable_styles) {
                 eprintln!("{}", msg);
                 process::exit(1);
             } else {
@@ -414,7 +470,7 @@ fn main() {
     }
 
     // Some flags can be run without a command.
-    if !(args.flag_update || args.flag_clear_cache || args.flag_config_path) {
+    if !(args.is_present("update") || args.is_present("clear_cache") || args.is_present("config_path")) {
         eprintln!("{}", USAGE);
         process::exit(1);
     }
